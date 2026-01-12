@@ -16,11 +16,18 @@ interface CacheEntry {
 export class BundleSizeProvider {
   private cache: Map<string, CacheEntry> = new Map();
   private pendingRequests: Map<string, Promise<PackageSizeInfo | null>> = new Map();
+  private missingCache: Map<string, number> = new Map();
+  private readonly missingCacheDurationMs = 60 * 60 * 1000; // 1 hour
 
   constructor(private context: vscode.ExtensionContext) {
     // Load cache from global state
     const savedCache = context.globalState.get<Record<string, CacheEntry>>('bundleSizeCache', {});
     this.cache = new Map(Object.entries(savedCache));
+  }
+
+  getCachedPackageSize(packageName: string): PackageSizeInfo | null {
+    const cleanName = this.cleanPackageName(packageName);
+    return this.getCachedSize(cleanName);
   }
 
   async getPackageSize(packageName: string): Promise<PackageSizeInfo | null> {
@@ -31,6 +38,12 @@ export class BundleSizeProvider {
     const cached = this.getCachedSize(cleanName);
     if (cached) {
       return cached;
+    }
+
+    // Avoid repeatedly fetching packages that recently failed
+    const lastFailure = this.missingCache.get(cleanName);
+    if (lastFailure && Date.now() - lastFailure < this.missingCacheDurationMs) {
+      return null;
     }
 
     // Check if there's already a pending request for this package
@@ -91,6 +104,7 @@ export class BundleSizeProvider {
 
       return data;
     } catch (error) {
+      this.missingCache.set(packageName, Date.now());
       if (axios.isAxiosError(error)) {
         if (error.response?.status === 404) {
           console.log(`Package not found: ${packageName}`);
@@ -139,18 +153,23 @@ export class BundleSizeProvider {
 
   clearCache(): void {
     this.cache.clear();
+    this.missingCache.clear();
     this.context.globalState.update('bundleSizeCache', {});
   }
 
   formatSize(bytes: number): string {
     if (bytes === 0) {
-      return '0 B';
+      return '0B';
     }
 
     const k = 1024;
-    const sizes = ['B', 'kB', 'MB', 'GB'];
+    const sizes = ['B', 'KB', 'MB', 'GB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
+    const value = parseFloat((bytes / Math.pow(k, i)).toFixed(2));
 
-    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+    // Remove unnecessary decimal points (2.00 -> 2, 2.10 -> 2.1)
+    const formattedValue = value % 1 === 0 ? value.toFixed(0) : value.toString();
+
+    return `${formattedValue}${sizes[i]}`;
   }
 }

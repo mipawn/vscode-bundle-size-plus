@@ -71,6 +71,11 @@ coverage/
 使用说明.md
 项目完成报告.md
 GIT_COMMIT_GUIDE.md
+本地测试指南.md
+颜色配置说明.md
+
+# Claude Code files
+.claude/
 
 # MacOS specific
 .AppleDouble

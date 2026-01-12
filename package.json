@@ -31,6 +31,18 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "colors": [
+      {
+        "id": "bundleSizePlus.inlayHint",
+        "description": "Color for bundle size inlay hints",
+        "defaults": {
+          "dark": "#00C853",
+          "light": "#008A00",
+          "highContrast": "#00C853",
+          "highContrastLight": "#008A00"
+        }
+      }
+    ],
     "configuration": {
       "title": "Bundle Size Plus",
       "properties": {
@@ -49,10 +61,21 @@
           "default": 86400000,
           "description": "Cache duration in milliseconds (default: 24 hours)"
         },
-        "bundleSizePlus.statusBarEnabled": {
+        "bundleSizePlus.sizeDisplayFormat": {
+          "type": "string",
+          "enum": ["short", "detailed"],
+          "default": "short",
+          "description": "Format for displaying size (short: '📦 13.2 kB gzip' or detailed: '📦 13.2 kB (gzipped)')"
+        },
+        "bundleSizePlus.showOnlyLargePackages": {
           "type": "boolean",
-          "default": true,
-          "description": "Show package size in status bar when hovering over imports"
+          "default": false,
+          "description": "Only show hints for packages larger than a certain size"
+        },
+        "bundleSizePlus.largePackageThreshold": {
+          "type": "number",
+          "default": 50000,
+          "description": "Threshold in bytes for large packages (default: 50kB)"
         }
       }
     }

@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { BundleSizeProvider } from './providers/BundleSizeProvider';
-import { InlayHintsProvider } from './providers/InlayHintsProvider';
+import { InlineDecorationsController } from './providers/InlineDecorationsController';
 
 export function activate(context: vscode.ExtensionContext) {
   console.log('Bundle Size Plus extension is now active!');
@@ -8,23 +8,10 @@ export function activate(context: vscode.ExtensionContext) {
   // Initialize the bundle size provider
   const bundleSizeProvider = new BundleSizeProvider(context);
 
-  // Register inlay hints provider for all supported languages
-  const supportedLanguages = [
-    'javascript',
-    'javascriptreact',
-    'typescript',
-    'typescriptreact',
-    'vue',
-    'svelte',
-  ];
-
-  supportedLanguages.forEach((language) => {
-    const inlayHintsProvider = vscode.languages.registerInlayHintsProvider(
-      { language, scheme: 'file' },
-      new InlayHintsProvider(bundleSizeProvider)
-    );
-    context.subscriptions.push(inlayHintsProvider);
-  });
+  // Inline decorations controller (green, no background)
+  const decorationsController = new InlineDecorationsController(bundleSizeProvider);
+  decorationsController.start();
+  context.subscriptions.push(decorationsController);
 
   // Register commands
   const clearCacheCommand = vscode.commands.registerCommand(
@@ -32,6 +19,7 @@ export function activate(context: vscode.ExtensionContext) {
     () => {
       bundleSizeProvider.clearCache();
       vscode.window.showInformationMessage('Bundle size cache cleared!');
+      decorationsController.refresh();
     }
   );
 

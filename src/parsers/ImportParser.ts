@@ -7,6 +7,7 @@ export interface ImportInfo {
   packageName: string;
   position: vscode.Position;
   line: number;
+  isLocal?: boolean; // Flag to indicate if this is a local import
 }
 
 export async function parseImports(document: vscode.TextDocument): Promise<ImportInfo[]> {
@@ -48,12 +49,13 @@ function parseJavaScriptImports(document: vscode.TextDocument): ImportInfo[] {
     for (const node of ast.program.body) {
       // Handle import declarations: import foo from 'package'
       if (node.type === 'ImportDeclaration' && node.source) {
-        const packageName = node.source.value;
-
-        // Skip relative imports
-        if (isRelativeImport(packageName)) {
+        // Skip type-only imports (TypeScript)
+        if ((node as any).importKind === 'type') {
           continue;
         }
+
+        const packageName = node.source.value;
+        const isLocal = isRelativeImport(packageName);
 
         const line = (node.loc?.start.line || 1) - 1;
         const position = document.lineAt(line).range.end;
@@ -62,6 +64,31 @@ function parseJavaScriptImports(document: vscode.TextDocument): ImportInfo[] {
           packageName,
           position,
           line,
+          isLocal,
+          });
+      }
+
+      // Handle export declarations with source: export * from 'package'
+      if (
+        (node.type === 'ExportNamedDeclaration' || node.type === 'ExportAllDeclaration') &&
+        (node as any).source
+      ) {
+        // Skip type-only exports (TypeScript)
+        if ((node as any).exportKind === 'type') {
+          continue;
+        }
+
+        const packageName = (node as any).source.value;
+        const isLocal = isRelativeImport(packageName);
+
+        const line = (node.loc?.start.line || 1) - 1;
+        const position = document.lineAt(line).range.end;
+
+        imports.push({
+          packageName,
+          position,
+          line,
+          isLocal,
         });
       }
 
@@ -78,11 +105,7 @@ function parseJavaScriptImports(document: vscode.TextDocument): ImportInfo[] {
             const arg = declaration.init.arguments[0];
             if (arg.type === 'StringLiteral') {
               const packageName = arg.value;
-
-              // Skip relative imports
-              if (isRelativeImport(packageName)) {
-                continue;
-              }
+              const isLocal = isRelativeImport(packageName);
 
               const line = (node.loc?.start.line || 1) - 1;
               const position = document.lineAt(line).range.end;
@@ -91,6 +114,7 @@ function parseJavaScriptImports(document: vscode.TextDocument): ImportInfo[] {
                 packageName,
                 position,
                 line,
+                isLocal,
               });
             }
           }
@@ -111,15 +135,13 @@ function parseImportsWithRegex(document: vscode.TextDocument): ImportInfo[] {
   const imports: ImportInfo[] = [];
 
   // Match import statements
-  const importRegex = /import\s+(?:(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+)?['"]([^'"]+)['"]/g;
+  const importRegex =
+    /import\s+(?:type\s+)?(?:(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+)?['"]([^'"]+)['"]/g;
   let match;
 
   while ((match = importRegex.exec(text)) !== null) {
     const packageName = match[1];
-
-    if (isRelativeImport(packageName)) {
-      continue;
-    }
+    const isLocal = isRelativeImport(packageName);
 
     const position = document.positionAt(match.index + match[0].length);
     const line = position.line;
@@ -128,6 +150,7 @@ function parseImportsWithRegex(document: vscode.TextDocument): ImportInfo[] {
       packageName,
       position: document.lineAt(line).range.end,
       line,
+      isLocal,
     });
   }
 
@@ -136,10 +159,7 @@ function parseImportsWithRegex(document: vscode.TextDocument): ImportInfo[] {
 
   while ((match = requireRegex.exec(text)) !== null) {
     const packageName = match[1];
-
-    if (isRelativeImport(packageName)) {
-      continue;
-    }
+    const isLocal = isRelativeImport(packageName);
 
     const position = document.positionAt(match.index + match[0].length);
     const line = position.line;
@@ -148,6 +168,26 @@ function parseImportsWithRegex(document: vscode.TextDocument): ImportInfo[] {
       packageName,
       position: document.lineAt(line).range.end,
       line,
+      isLocal,
+    });
+  }
+
+  // Match export ... from statements
+  const exportRegex =
+    /export\s+(?:type\s+)?(?:\*\s+from|\{[\s\S]*?\}\s+from)\s+['"]([^'"]+)['"]/g;
+
+  while ((match = exportRegex.exec(text)) !== null) {
+    const packageName = match[1];
+    const isLocal = isRelativeImport(packageName);
+
+    const position = document.positionAt(match.index + match[0].length);
+    const line = position.line;
+
+    imports.push({
+      packageName,
+      position: document.lineAt(line).range.end,
+      line,
+      isLocal,
     });
   }
 
@@ -159,6 +199,8 @@ function isRelativeImport(packageName: string): boolean {
     packageName.startsWith('./') ||
     packageName.startsWith('../') ||
     packageName.startsWith('/') ||
-    packageName.startsWith('~/')
+    packageName.startsWith('~/') ||
+    packageName.startsWith('@/') ||
+    packageName.startsWith('#/')
   );
 }

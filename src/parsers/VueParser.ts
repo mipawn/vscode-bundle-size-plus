@@ -9,16 +9,22 @@ export async function parseVueScript(document: vscode.TextDocument): Promise<Imp
 
   try {
     // Parse Vue SFC
-    const { descriptor } = vueCompilerParse(text, {
+    const { descriptor, errors } = vueCompilerParse(text, {
       filename: document.fileName,
     });
+
+    if (errors && errors.length > 0) {
+      console.warn('Vue SFC parse warnings:', errors);
+    }
 
     // Process <script> tag
     if (descriptor.script) {
       const scriptContent = descriptor.script.content;
       const scriptOffset = descriptor.script.loc.start.offset;
 
-      imports.push(...parseScriptContent(scriptContent, scriptOffset, document, descriptor.script.lang));
+      const scriptImports = parseScriptContent(scriptContent, scriptOffset, document, descriptor.script.lang);
+      console.log(`Found ${scriptImports.length} imports in <script> tag`);
+      imports.push(...scriptImports);
     }
 
     // Process <script setup> tag
@@ -26,7 +32,14 @@ export async function parseVueScript(document: vscode.TextDocument): Promise<Imp
       const scriptContent = descriptor.scriptSetup.content;
       const scriptOffset = descriptor.scriptSetup.loc.start.offset;
 
-      imports.push(...parseScriptContent(scriptContent, scriptOffset, document, descriptor.scriptSetup.lang));
+      const setupImports = parseScriptContent(scriptContent, scriptOffset, document, descriptor.scriptSetup.lang);
+      console.log(`Found ${setupImports.length} imports in <script setup> tag`);
+      imports.push(...setupImports);
+    }
+
+    if (imports.length === 0) {
+      console.log('No imports found via Vue compiler, falling back to regex parsing');
+      return parseVueScriptWithRegex(document);
     }
   } catch (error) {
     console.error('Error parsing Vue file:', error);
@@ -62,16 +75,15 @@ function parseScriptContent(
 
     for (const node of ast.program.body) {
       if (node.type === 'ImportDeclaration' && node.source) {
-        const packageName = node.source.value;
-
-        // Skip relative imports
-        if (isRelativeImport(packageName)) {
+        // Skip type-only imports (TypeScript)
+        if ((node as any).importKind === 'type') {
           continue;
         }
 
-        // Calculate actual position in the document
-        const nodeStart = node.loc?.start.offset || 0;
-        const actualOffset = offset + nodeStart;
+        const packageName = node.source.value;
+        const isLocal = isRelativeImport(packageName);
+
+        const actualOffset = offset + (typeof (node as any).start === 'number' ? (node as any).start : 0);
         const position = document.positionAt(actualOffset);
         const lineEndPosition = document.lineAt(position.line).range.end;
 
@@ -79,6 +91,32 @@ function parseScriptContent(
           packageName,
           position: lineEndPosition,
           line: position.line,
+          isLocal,
+        });
+      }
+
+      // Handle export declarations with source: export * from 'package'
+      if (
+        (node.type === 'ExportNamedDeclaration' || node.type === 'ExportAllDeclaration') &&
+        (node as any).source
+      ) {
+        // Skip type-only exports (TypeScript)
+        if ((node as any).exportKind === 'type') {
+          continue;
+        }
+
+        const packageName = (node as any).source.value;
+        const isLocal = isRelativeImport(packageName);
+
+        const actualOffset = offset + (typeof (node as any).start === 'number' ? (node as any).start : 0);
+        const position = document.positionAt(actualOffset);
+        const lineEndPosition = document.lineAt(position.line).range.end;
+
+        imports.push({
+          packageName,
+          position: lineEndPosition,
+          line: position.line,
+          isLocal,
         });
       }
 
@@ -95,13 +133,10 @@ function parseScriptContent(
             const arg = declaration.init.arguments[0];
             if (arg.type === 'StringLiteral') {
               const packageName = arg.value;
+              const isLocal = isRelativeImport(packageName);
 
-              if (isRelativeImport(packageName)) {
-                continue;
-              }
-
-              const nodeStart = node.loc?.start.offset || 0;
-              const actualOffset = offset + nodeStart;
+              const actualOffset =
+                offset + (typeof (node as any).start === 'number' ? (node as any).start : 0);
               const position = document.positionAt(actualOffset);
               const lineEndPosition = document.lineAt(position.line).range.end;
 
@@ -109,6 +144,7 @@ function parseScriptContent(
                 packageName,
                 position: lineEndPosition,
                 line: position.line,
+                isLocal,
               });
             }
           }
@@ -135,15 +171,13 @@ function parseVueScriptWithRegex(document: vscode.TextDocument): ImportInfo[] {
     const scriptStart = scriptMatch.index + scriptMatch[0].indexOf(scriptContent);
 
     // Match import statements
-    const importRegex = /import\s+(?:(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+)?['"]([^'"]+)['"]/g;
+    const importRegex =
+      /import\s+(?:type\s+)?(?:(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+)?['"]([^'"]+)['"]/g;
     let match;
 
     while ((match = importRegex.exec(scriptContent)) !== null) {
       const packageName = match[1];
-
-      if (isRelativeImport(packageName)) {
-        continue;
-      }
+      const isLocal = isRelativeImport(packageName);
 
       const actualOffset = scriptStart + match.index + match[0].length;
       const position = document.positionAt(actualOffset);
@@ -153,6 +187,7 @@ function parseVueScriptWithRegex(document: vscode.TextDocument): ImportInfo[] {
         packageName,
         position: lineEndPosition,
         line: position.line,
+        isLocal,
       });
     }
 
@@ -161,10 +196,7 @@ function parseVueScriptWithRegex(document: vscode.TextDocument): ImportInfo[] {
 
     while ((match = requireRegex.exec(scriptContent)) !== null) {
       const packageName = match[1];
-
-      if (isRelativeImport(packageName)) {
-        continue;
-      }
+      const isLocal = isRelativeImport(packageName);
 
       const actualOffset = scriptStart + match.index + match[0].length;
       const position = document.positionAt(actualOffset);
@@ -174,6 +206,27 @@ function parseVueScriptWithRegex(document: vscode.TextDocument): ImportInfo[] {
         packageName,
         position: lineEndPosition,
         line: position.line,
+        isLocal,
+      });
+    }
+
+    // Match export ... from statements
+    const exportRegex =
+      /export\s+(?:type\s+)?(?:\*\s+from|\{[\s\S]*?\}\s+from)\s+['"]([^'"]+)['"]/g;
+
+    while ((match = exportRegex.exec(scriptContent)) !== null) {
+      const packageName = match[1];
+      const isLocal = isRelativeImport(packageName);
+
+      const actualOffset = scriptStart + match.index + match[0].length;
+      const position = document.positionAt(actualOffset);
+      const lineEndPosition = document.lineAt(position.line).range.end;
+
+      imports.push({
+        packageName,
+        position: lineEndPosition,
+        line: position.line,
+        isLocal,
       });
     }
   }
@@ -186,6 +239,8 @@ function isRelativeImport(packageName: string): boolean {
     packageName.startsWith('./') ||
     packageName.startsWith('../') ||
     packageName.startsWith('/') ||
-    packageName.startsWith('~/')
+    packageName.startsWith('~/') ||
+    packageName.startsWith('@/') ||
+    packageName.startsWith('#/')
   );
 }

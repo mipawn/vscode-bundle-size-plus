@@ -6,7 +6,7 @@ A VSCode extension that displays the bundle size of imported packages directly i
 
 ## Features
 
-- **Inline Size Display**: Shows package sizes directly next to import statements using inlay hints
+- **Inline Size Display**: Shows package sizes directly next to import statements using inline decorations (no background)
 - **Multi-Framework Support**: Works with JavaScript, TypeScript, Vue, and Svelte files
 - **Real-time Information**: Fetches accurate bundle size data from bundlephobia API
 - **Smart Caching**: Caches results to minimize API calls and improve performance
