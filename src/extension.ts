@@ -1,0 +1,57 @@
+import * as vscode from 'vscode';
+import { BundleSizeProvider } from './providers/BundleSizeProvider';
+import { InlayHintsProvider } from './providers/InlayHintsProvider';
+
+export function activate(context: vscode.ExtensionContext) {
+  console.log('Bundle Size Plus extension is now active!');
+
+  // Initialize the bundle size provider
+  const bundleSizeProvider = new BundleSizeProvider(context);
+
+  // Register inlay hints provider for all supported languages
+  const supportedLanguages = [
+    'javascript',
+    'javascriptreact',
+    'typescript',
+    'typescriptreact',
+    'vue',
+    'svelte',
+  ];
+
+  supportedLanguages.forEach((language) => {
+    const inlayHintsProvider = vscode.languages.registerInlayHintsProvider(
+      { language, scheme: 'file' },
+      new InlayHintsProvider(bundleSizeProvider)
+    );
+    context.subscriptions.push(inlayHintsProvider);
+  });
+
+  // Register commands
+  const clearCacheCommand = vscode.commands.registerCommand(
+    'bundleSizePlus.clearCache',
+    () => {
+      bundleSizeProvider.clearCache();
+      vscode.window.showInformationMessage('Bundle size cache cleared!');
+    }
+  );
+
+  const toggleInlayHintsCommand = vscode.commands.registerCommand(
+    'bundleSizePlus.toggleInlayHints',
+    async () => {
+      const config = vscode.workspace.getConfiguration('bundleSizePlus');
+      const currentValue = config.get('enableInlayHints', true);
+      await config.update('enableInlayHints', !currentValue, true);
+      vscode.window.showInformationMessage(
+        `Inlay hints ${!currentValue ? 'enabled' : 'disabled'}`
+      );
+    }
+  );
+
+  context.subscriptions.push(clearCacheCommand, toggleInlayHintsCommand);
+
+  console.log('Bundle Size Plus: All providers registered');
+}
+
+export function deactivate() {
+  console.log('Bundle Size Plus extension is now deactivated');
+}

@@ -1,0 +1,89 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+package-lock.json
+yarn.lock
+
+# Build output
+dist/
+out/
+*.vsix
+
+# IDE
+# Keep .vscode/ for debugging config, but ignore some files
+.vscode-test/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+pnpm-debug.log*
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+.temp/
+
+# Environment
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Testing
+coverage/
+.nyc_output/
+*.lcov
+
+# Misc
+.eslintcache
+*.tsbuildinfo
+
+# VSCode extension specific
+*.vsix
+*.map
+.vscode-test/
+
+# Private/internal documentation (not for public repo)
+使用说明.md
+项目完成报告.md
+GIT_COMMIT_GUIDE.md
+
+# MacOS specific
+.AppleDouble
+.LSOverride
+Icon
+
+# Windows specific
+[Tt]humbs.db
+[Dd]esktop.ini
+$RECYCLE.BIN/
+
+# Linux specific
+*~
+.fuse_hidden*
+.directory
+.Trash-*
