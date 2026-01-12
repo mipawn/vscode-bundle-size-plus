@@ -4,6 +4,10 @@
   "description": "Display import/require package size in the editor (supports Vue, Svelte)",
   "version": "0.1.0",
   "publisher": "your-publisher-name",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mipawn/vscode-bundle-size-plus.git"
+  },
   "engines": {
     "vscode": "^1.80.0"
   },

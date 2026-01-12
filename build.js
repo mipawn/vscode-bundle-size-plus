@@ -21,8 +21,9 @@ const buildOptions = {
   format: 'cjs',
   platform: 'node',
   target: 'node16',
-  sourcemap: true,
-  minify: !isWatch,
+  sourcemap: isWatch, // Only generate sourcemap in watch mode
+  minify: true, // Always minify for production
+  treeShaking: true, // Enable tree shaking
   logLevel: 'info',
 };
 
