@@ -39,6 +39,12 @@ export class InlineDecorationsController implements vscode.Disposable {
     this.disposables.push(
       vscode.window.onDidChangeActiveTextEditor(() => this.scheduleUpdate()),
       vscode.window.onDidChangeVisibleTextEditors(() => this.scheduleUpdate()),
+      vscode.window.onDidChangeTextEditorVisibleRanges((e) => {
+        // We only compute decorations for visible imports, so scrolling must trigger a refresh.
+        if (vscode.window.visibleTextEditors.includes(e.textEditor)) {
+          this.scheduleUpdate();
+        }
+      }),
       vscode.workspace.onDidOpenTextDocument((doc) => {
         if (vscode.window.visibleTextEditors.some((ed) => ed.document === doc)) {
           this.scheduleUpdate();
@@ -48,6 +54,14 @@ export class InlineDecorationsController implements vscode.Disposable {
         if (vscode.window.visibleTextEditors.some((ed) => ed.document === e.document)) {
           this.scheduleUpdate();
         }
+      }),
+      vscode.workspace.onDidSaveTextDocument((doc) => {
+        if (vscode.window.visibleTextEditors.some((ed) => ed.document === doc)) {
+          this.scheduleUpdate();
+        }
+      }),
+      vscode.workspace.onDidCloseTextDocument((doc) => {
+        this.importCache.delete(doc.uri.toString());
       }),
       vscode.workspace.onDidChangeConfiguration((e) => {
         if (e.affectsConfiguration('bundleSizePlus')) {
@@ -103,9 +117,10 @@ export class InlineDecorationsController implements vscode.Disposable {
     const imports = await this.getCachedImports(document, key);
     const visibleImports = this.filterVisibleImports(imports, editor);
     const workspaceRoot = vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath;
+    const bundlingAvailable = this.bundleSizeProvider.isBundlingAvailable(workspaceRoot);
 
     const decorations: vscode.DecorationOptions[] = [];
-    const missingPackages = new Set<string>();
+    const missingImports = new Map<string, ImportInfo>();
 
     for (const imp of visibleImports) {
       const range = new vscode.Range(imp.position, imp.position);
@@ -141,8 +156,8 @@ export class InlineDecorationsController implements vscode.Disposable {
         continue;
       }
 
-      // Non-local or alias that didn't resolve as local: use bundlephobia
-      const cached = this.bundleSizeProvider.getCachedPackageSize(imp.packageName);
+      // Non-local: use local bundler to calculate size
+      const cached = this.bundleSizeProvider.getCachedImportSize(imp, workspaceRoot);
       if (cached) {
         const minifiedSize = this.bundleSizeProvider.formatSize(cached.size);
         const gzippedSize = this.bundleSizeProvider.formatSize(cached.gzip);
@@ -153,13 +168,15 @@ export class InlineDecorationsController implements vscode.Disposable {
           hoverMessage: new vscode.MarkdownString(
             `### ${cached.name}\n\n` +
               `**Version:** ${cached.version}\n\n` +
-              `**Sizes:**\n` +
+              `**Sizes (bundled with esbuild):**\n` +
               `- Minified: ${minifiedSize}\n` +
               `- Gzipped: ${gzippedSize}\n\n` +
-              `[View on Bundlephobia](https://bundlephobia.com/package/${cached.name}@${cached.version})`
+              `_Size calculated by local bundling_`
           ),
         });
       } else {
+        const cacheState = this.bundleSizeProvider.getImportCacheState(imp, workspaceRoot);
+
         // If we can resolve to a concrete file (e.g. node_modules subpath), show file size as a fast fallback.
         if (resolvedPath) {
           const size = getLocalFileSize(resolvedPath);
@@ -168,6 +185,19 @@ export class InlineDecorationsController implements vscode.Disposable {
           if (size !== null && gzip !== null) {
             const sizeLabel = this.bundleSizeProvider.formatSize(size);
             const gzipLabel = this.bundleSizeProvider.formatSize(gzip);
+
+            let bundleNote = '_(Bundle size being calculated...)_';
+            if (!workspaceRoot) {
+              bundleNote = '_(Bundle size unavailable: open a workspace folder)_';
+            } else if (!bundlingAvailable) {
+              bundleNote =
+                '_(Bundle size unavailable: install `esbuild` in your project or globally; see Output → Bundle Size Plus)_';
+            } else if (cacheState === 'failed') {
+              bundleNote =
+                '_(Bundle size calculation failed recently; showing resolved file size)_';
+            } else if (cacheState === 'pending') {
+              bundleNote = '_(Bundle size being calculated...)_';
+            }
 
             decorations.push({
               range,
@@ -178,25 +208,26 @@ export class InlineDecorationsController implements vscode.Disposable {
                   `**Resolved:** \`${resolvedPath}\`\n\n` +
                   `**File Size:** ${sizeLabel}\n` +
                   `**Gzipped:** ${gzipLabel}\n\n` +
-                  `_(Bundlephobia data not cached yet.)_`
+                  `${bundleNote}`
               ),
             });
           }
         }
 
-        // Trigger background fetch (deduped by BundleSizeProvider)
-        missingPackages.add(imp.packageName);
+        // Trigger background build (deduped by LocalBundler)
+        const cacheId = this.bundleSizeProvider.getImportCacheId(imp);
+        if (cacheId && workspaceRoot && bundlingAvailable && cacheState === 'missing') {
+          missingImports.set(cacheId, imp);
+        }
       }
     }
 
     editor.setDecorations(this.decorationType, decorations);
 
-    // Fetch missing packages in background and refresh once resolved
-    for (const pkg of missingPackages) {
-      void this.bundleSizeProvider.getPackageSize(pkg).then((result) => {
-        if (result) {
-          this.scheduleUpdate();
-        }
+    // Build missing packages in background and refresh once resolved
+    for (const imp of missingImports.values()) {
+      void this.bundleSizeProvider.getImportSize(imp, workspaceRoot).then(() => {
+        this.scheduleUpdate();
       });
     }
   }

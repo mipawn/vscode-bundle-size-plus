@@ -20,6 +20,8 @@ export class InlayHintsProvider implements vscode.InlayHintsProvider {
 
     const hints: vscode.InlayHint[] = [];
 
+    const workspaceRoot = vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath;
+
     try {
       // Parse imports from the document
       const imports = await parseImports(document);
@@ -35,7 +37,7 @@ export class InlayHintsProvider implements vscode.InlayHintsProvider {
 
         // Handle local imports
         if (imp.isLocal) {
-          const resolvedPath = resolveImportPath(imp.packageName, document.uri.fsPath);
+          const resolvedPath = resolveImportPath(imp.packageName, document.uri.fsPath, workspaceRoot);
           if (resolvedPath) {
             const fileSize = getLocalFileSize(resolvedPath);
             const gzipSize = getGzipSize(resolvedPath);
@@ -68,7 +70,7 @@ export class InlayHintsProvider implements vscode.InlayHintsProvider {
         }
 
         // Handle npm packages
-        const sizeInfo = await this.bundleSizeProvider.getPackageSize(imp.packageName);
+        const sizeInfo = await this.bundleSizeProvider.getImportSize(imp, workspaceRoot);
 
         if (sizeInfo) {
           const showGzip = config.get('showGzipSize', true);
@@ -87,7 +89,7 @@ export class InlayHintsProvider implements vscode.InlayHintsProvider {
 
           const label = new vscode.InlayHintLabelPart(` ${minifiedSize} (${gzippedSize} zipped)`);
           label.tooltip = new vscode.MarkdownString(
-            `### ${imp.packageName}\n\n` +
+            `### ${sizeInfo.name}\n\n` +
               `**Version:** ${sizeInfo.version}\n\n` +
               `**Sizes:**\n` +
               `- Minified: ${minifiedSize}\n` +

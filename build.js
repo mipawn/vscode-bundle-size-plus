@@ -8,6 +8,7 @@ const buildOptions = {
   outfile: './dist/extension.js',
   external: [
     'vscode',
+    'esbuild', // esbuild has native binaries, must be external
     // Optional dependencies from @vue/compiler-sfc that we don't need
     'velocityjs', 'dustjs-linkedin', 'atpl', 'liquor', 'twig', 'ejs', 'eco',
     'jazz', 'jqtpl', 'hamljs', 'hamlet', 'whiskers', 'haml-coffee', 'hogan.js',

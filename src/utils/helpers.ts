@@ -72,7 +72,11 @@ export function resolveImportPath(
         return aliasResolved;
       }
 
-      const tsconfigResolved = resolveWithTsconfigPaths(normalizedImportPath, currentDir, workspaceRoot);
+      const tsconfigResolved = resolveWithTsconfigPaths(
+        normalizedImportPath,
+        currentDir,
+        workspaceRoot
+      );
       if (tsconfigResolved) {
         return tsconfigResolved;
       }
@@ -234,7 +238,11 @@ function findNearestPackageRoot(currentDir: string, workspaceRoot: string): stri
   return null;
 }
 
-function resolveWithTsconfigPaths(importPath: string, currentDir: string, workspaceRoot: string): string | null {
+function resolveWithTsconfigPaths(
+  importPath: string,
+  currentDir: string,
+  workspaceRoot: string
+): string | null {
   const tsconfigPath = findNearestTsconfig(currentDir, workspaceRoot);
   if (!tsconfigPath) {
     return null;
@@ -319,17 +327,21 @@ function getTsconfigMatcher(tsconfigPath: string): TsconfigPathMatcher | null {
   }
 
   const json = parseJsonc(raw);
-  const compilerOptions = (json && typeof json === 'object' ? (json as any).compilerOptions : undefined) ?? {};
+  const compilerOptions =
+    (json && typeof json === 'object' ? (json as any).compilerOptions : undefined) ?? {};
 
   const baseUrl = typeof compilerOptions.baseUrl === 'string' ? compilerOptions.baseUrl : '.';
-  const paths = compilerOptions.paths && typeof compilerOptions.paths === 'object' ? compilerOptions.paths : {};
+  const paths =
+    compilerOptions.paths && typeof compilerOptions.paths === 'object' ? compilerOptions.paths : {};
 
   const tsconfigDir = path.dirname(tsconfigPath);
   const baseUrlDir = path.resolve(tsconfigDir, baseUrl);
 
   const rules: TsconfigPathMatcher['rules'] = [];
   for (const [pattern, targetsRaw] of Object.entries(paths as Record<string, unknown>)) {
-    const targets = Array.isArray(targetsRaw) ? targetsRaw.filter((t): t is string => typeof t === 'string') : [];
+    const targets = Array.isArray(targetsRaw)
+      ? targetsRaw.filter((t): t is string => typeof t === 'string')
+      : [];
     if (targets.length === 0) {
       continue;
     }

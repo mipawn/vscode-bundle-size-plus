@@ -6,11 +6,12 @@ A VSCode extension that displays the bundle size of imported packages directly i
 
 ## Features
 
-- **Inline Size Display**: Shows package sizes directly next to import statements using inline decorations (no background)
-- **Multi-Framework Support**: Works with JavaScript, TypeScript, Vue, and Svelte files
-- **Real-time Information**: Fetches accurate bundle size data from bundlephobia API
-- **Smart Caching**: Caches results to minimize API calls and improve performance
-- **Customizable Display**: Choose between minified or gzipped sizes
+- **Local Bundle Analysis (esbuild)**: Bundles packages locally (using your workspace `esbuild`), measuring minified + gzipped output based on the versions you actually have installed
+- **Inline Decorations + Hover**: Shows sizes right next to `import`/`export`/`require()` lines, with hover details (resolved path / version / sizes)
+- **Import-Signature Aware**: Measures what you import (default/named/namespace/side-effect) so tree-shaking can reflect smaller imports
+- **Vue & Svelte Support**: Parses `<script>` / `<script setup>` blocks (including `lang="ts"`, `lang="tsx"`, `lang="jsx"`)
+- **Local/Workspace Imports**: For resolved files, shows raw file size + gzipped size (supports common aliases and `tsconfig.json` paths)
+- **Offline by Design**: No external API calls; results are cached and computed lazily for visible imports
 
 ## Supported File Types
 
@@ -19,42 +20,91 @@ A VSCode extension that displays the bundle size of imported packages directly i
 - Vue (`.vue`) - Parses `<script>` sections
 - Svelte (`.svelte`) - Parses `<script>` sections
 
+## Supported Syntax
+
+- `import ... from 'pkg'`, `import * as ns from 'pkg'`, `import { named } from 'pkg'`
+- `import 'pkg'` (side-effect imports)
+- `export * from 'pkg'`, `export { named } from 'pkg'`
+- `const x = require('pkg')`, `const { named } = require('pkg')`
+
 ## Usage
 
-Simply open any supported file with import statements. The extension will automatically display the package size next to each import:
+Open any supported file with imports; sizes appear at the end of the line. Hover the size label for details.
 
 ```javascript
-import React from 'react'; // 📦 6.4 kB (gzipped)
-import lodash from 'lodash'; // 📦 24.3 kB (gzipped)
+import React from 'react'; // 6.4KB (2.1KB zipped)
+import lodash from 'lodash'; // 72.5KB (24.3KB zipped)
 ```
-
-## Configuration
-
-You can customize the extension behavior through VSCode settings:
-
-- `bundleSizePlus.enableInlayHints`: Enable/disable inline hints (default: `true`)
-- `bundleSizePlus.showGzipSize`: Show gzipped size instead of minified size (default: `true`)
-- `bundleSizePlus.cacheDuration`: Cache duration in milliseconds (default: `86400000` - 24 hours)
-- `bundleSizePlus.statusBarEnabled`: Show package size in status bar (default: `true`)
-
-## Requirements
-
-- VSCode version 1.80.0 or higher
-- Internet connection for fetching package size data
 
 ## How It Works
 
 The extension:
 
 1. Parses import statements from your code using Babel parser
-2. Extracts package names from different file types (including Vue and Svelte)
-3. Queries the bundlephobia API for accurate bundle size information
+2. Uses your workspace `esbuild` (if available) to bundle each imported package locally
+3. Calculates minified and gzipped sizes
 4. Displays the results as inline hints in your editor
 5. Caches results to improve performance
 
+### Why Local Bundling?
+
+Unlike extensions that rely on external APIs (like Bundlephobia), this extension:
+
+- **More Accurate**: Uses your actual installed package versions
+- **Works Offline**: No internet connection required
+- **Faster**: No network latency after initial bundling
+- **Private**: Your package usage data stays local
+
+## Configuration
+
+You can customize the extension behavior through VSCode settings:
+
+| Setting                                |    Default | Description                                  |
+| -------------------------------------- | ---------: | -------------------------------------------- |
+| `bundleSizePlus.enableInlayHints`      |     `true` | Enable/disable the inline size display       |
+| `bundleSizePlus.showGzipSize`          |     `true` | Show gzipped size as primary size indicator  |
+| `bundleSizePlus.cacheDuration`         | `86400000` | Cache duration in milliseconds (24 hours)    |
+| `bundleSizePlus.sizeDisplayFormat`     |    `short` | Display format: `short` or `detailed`        |
+| `bundleSizePlus.showOnlyLargePackages` |    `false` | Only show hints for packages above threshold |
+| `bundleSizePlus.largePackageThreshold` |    `50000` | Threshold in bytes for large packages (50KB) |
+
+## Commands
+
+- `bundleSizePlus.clearCache`: Clear the in-memory bundle size cache
+- `bundleSizePlus.toggleInlayHints`: Toggle the inline display on/off
+
+## Theme / Color
+
+The hint color can be customized via the theme token `bundleSizePlus.inlayHint`:
+
+```json
+{
+  "workbench.colorCustomizations": {
+    "bundleSizePlus.inlayHint": "#00C853"
+  }
+}
+```
+
+## Requirements
+
+- VSCode version 1.80.0 or higher
+- Project with `node_modules` directory (packages must be installed)
+- For bundle-size results, `esbuild` must be resolvable:
+  - First from your project dependencies (recommended; Vite projects are usually fine even if `esbuild` is transitive)
+  - Then from a global install (`npm i -g esbuild`)
+  - If not found, check **Output → Bundle Size Plus** for the warning log, and the extension will fall back to resolved file sizes when possible
+  - If you use pnpm and `esbuild` isn't resolvable, add it explicitly: `pnpm add -D esbuild`
+
+## Limitations
+
+- Some packages may not be bundleable (e.g., packages with native dependencies)
+- First-time bundling may take a moment for large packages
+- Sizes are calculated with esbuild (browser/ESM, minified + tree-shaken) and may differ from your real build setup
+- If `esbuild` is missing from the workspace, bundle sizes are unavailable and file-size fallbacks are used instead
+
 ## Installation
 
-### From VSCode Marketplace (Coming Soon)
+### From VSCode Marketplace
 
 1. Open VSCode
 2. Go to Extensions (Ctrl+Shift+X / Cmd+Shift+X)
@@ -89,12 +139,6 @@ npm run build
 npm run watch
 ```
 
-## Known Limitations
-
-- Requires internet connection for initial package lookups
-- Bundle sizes are fetched from bundlephobia, which may not reflect your exact bundle configuration
-- Only works with npm packages published on the registry
-
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
@@ -102,10 +146,6 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## License
 
 MIT
-
-## Credits
-
-Bundle size data provided by [Bundlephobia](https://bundlephobia.com/)
 
 ---
 

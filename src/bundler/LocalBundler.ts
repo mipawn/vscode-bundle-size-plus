@@ -1,0 +1,461 @@
+import * as path from 'path';
+import * as fs from 'fs';
+import * as zlib from 'zlib';
+import { createRequire } from 'module';
+import { logWarnToOutput } from '../utils/logger';
+type EsbuildModule = typeof import('esbuild');
+
+const workspaceEsbuildCache = new Map<string, EsbuildModule | null>();
+let globalEsbuildModule: EsbuildModule | null = null;
+let triedGlobalEsbuild = false;
+const warnedMissingEsbuild = new Set<string>();
+
+function warnMissingEsbuildOnce(scope: string, error?: unknown): void {
+  if (warnedMissingEsbuild.has(scope)) {
+    return;
+  }
+  warnedMissingEsbuild.add(scope);
+
+  const message =
+    `[Bundle Size Plus] Could not resolve \`esbuild\` (${scope}). Local bundling is disabled.\n` +
+    `Tried: project dependencies (including Vite) -> global install.\n` +
+    `Fix: install \`esbuild\` in your project (recommended): npm i -D esbuild (or pnpm/yarn),\n` +
+    `or install globally: npm i -g esbuild.\n` +
+    `After installing, run "Bundle Size Plus: Clear Cache" or reload VS Code.`;
+
+  logWarnToOutput(message, error);
+  console.warn(message, error);
+}
+
+function tryLoadEsbuildFromWorkspace(workspaceRoot: string): { module: EsbuildModule | null; error?: unknown } {
+  let lastError: unknown;
+
+  try {
+    const requireFromWorkspace = createRequire(path.join(workspaceRoot, 'package.json'));
+
+    try {
+      return { module: requireFromWorkspace('esbuild') as EsbuildModule };
+    } catch (error) {
+      lastError = error;
+    }
+
+    // Vite projects often have esbuild as a transitive dependency (e.g. pnpm),
+    // so try resolving esbuild from Vite's dependency tree.
+    try {
+      const viteEntry = requireFromWorkspace.resolve('vite');
+      const requireFromVite = createRequire(viteEntry);
+      return { module: requireFromVite('esbuild') as EsbuildModule };
+    } catch (error) {
+      lastError = lastError ?? error;
+    }
+
+    // If Vite is ESM-only in this environment, require.resolve('vite') may fail due to exports.
+    // As a fallback, try the physical path from node_modules.
+    try {
+      const viteDir = path.join(workspaceRoot, 'node_modules', 'vite');
+      if (fs.existsSync(viteDir)) {
+        const realViteDir = fs.realpathSync(viteDir);
+        const requireFromViteDir = createRequire(path.join(realViteDir, 'package.json'));
+        return { module: requireFromViteDir('esbuild') as EsbuildModule };
+      }
+    } catch (error) {
+      lastError = lastError ?? error;
+    }
+  } catch (error) {
+    lastError = error;
+  }
+
+  return { module: null, error: lastError };
+}
+
+function tryLoadEsbuildFromGlobal(): { module: EsbuildModule | null; error?: unknown } {
+  if (triedGlobalEsbuild) {
+    return { module: globalEsbuildModule };
+  }
+
+  triedGlobalEsbuild = true;
+  let lastError: unknown;
+
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const moduleBuiltin = require('module') as { globalPaths?: string[] };
+    const globalPaths = Array.isArray(moduleBuiltin.globalPaths) ? moduleBuiltin.globalPaths : [];
+
+    for (const globalPath of globalPaths) {
+      try {
+        const requireFromGlobal = createRequire(path.join(globalPath, 'package.json'));
+        globalEsbuildModule = requireFromGlobal('esbuild') as EsbuildModule;
+        return { module: globalEsbuildModule };
+      } catch (error) {
+        lastError = error;
+      }
+    }
+  } catch (error) {
+    lastError = error;
+  }
+
+  globalEsbuildModule = null;
+  return { module: null, error: lastError };
+}
+
+function getEsbuild(workspaceRoot?: string): EsbuildModule | null {
+  if (workspaceRoot) {
+    const cachedWorkspace = workspaceEsbuildCache.get(workspaceRoot);
+    if (cachedWorkspace) {
+      return cachedWorkspace;
+    }
+
+    let workspaceError: unknown;
+    if (cachedWorkspace === undefined) {
+      const workspaceLoad = tryLoadEsbuildFromWorkspace(workspaceRoot);
+      workspaceEsbuildCache.set(workspaceRoot, workspaceLoad.module);
+      if (workspaceLoad.module) {
+        return workspaceLoad.module;
+      }
+      workspaceError = workspaceLoad.error;
+    }
+
+    const globalLoad = tryLoadEsbuildFromGlobal();
+    if (globalLoad.module) {
+      return globalLoad.module;
+    }
+
+    warnMissingEsbuildOnce(workspaceRoot, workspaceError ?? globalLoad.error);
+    return null;
+  }
+
+  const globalLoad = tryLoadEsbuildFromGlobal();
+  if (globalLoad.module) {
+    return globalLoad.module;
+  }
+
+  warnMissingEsbuildOnce('global', globalLoad.error);
+  return null;
+}
+
+export interface BundleSizeResult {
+  name: string;
+  size: number;
+  gzip: number;
+  version: string;
+}
+
+export interface BundleRequest {
+  /**
+   * A stable identifier used for caching/deduping (per workspace).
+   * Must include enough info to represent the import granularity.
+   */
+  id: string;
+
+  /**
+   * Human-friendly label for hover.
+   */
+  displayName: string;
+
+  /**
+   * ESM entry contents used for bundling/measurement.
+   */
+  entryContent: string;
+
+  /**
+   * Root package name for reading version from node_modules.
+   * If not available, version will be reported as 'unknown'.
+   */
+  versionPackageName: string | null;
+}
+
+export type BundleCacheState = 'cached' | 'pending' | 'failed' | 'missing' | 'unavailable';
+
+interface CacheEntry {
+  data: BundleSizeResult;
+  timestamp: number;
+}
+
+/**
+ * LocalBundler uses esbuild to bundle packages locally and calculate their sizes.
+ * This provides more accurate results than online APIs as it uses the actual
+ * package versions installed in the project.
+ */
+export class LocalBundler {
+  private cache = new Map<string, CacheEntry>();
+  private pendingBuilds = new Map<string, Promise<BundleSizeResult | null>>();
+  private failedPackages = new Map<string, number>();
+  private readonly failedCacheDuration = 5 * 60 * 1000; // 5 minutes
+  private readonly cacheDuration = 60 * 60 * 1000; // 1 hour
+
+  /**
+   * Get the bundle size for an import signature using local esbuild bundling.
+   */
+  async getBundleSize(request: BundleRequest, workspaceRoot: string): Promise<BundleSizeResult | null> {
+    const cacheKey = `${workspaceRoot}:${request.id}`;
+
+    // Check cache first
+    const cached = this.cache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < this.cacheDuration) {
+      return cached.data;
+    }
+
+    // Check if recently failed
+    const failedTime = this.failedPackages.get(cacheKey);
+    if (failedTime && Date.now() - failedTime < this.failedCacheDuration) {
+      return null;
+    }
+
+    // Check for pending build
+    const pending = this.pendingBuilds.get(cacheKey);
+    if (pending) {
+      return pending;
+    }
+
+    // Start new build
+    const buildPromise = this.buildAndMeasure(request, workspaceRoot, cacheKey);
+    this.pendingBuilds.set(cacheKey, buildPromise);
+
+    try {
+      return await buildPromise;
+    } finally {
+      this.pendingBuilds.delete(cacheKey);
+    }
+  }
+
+  /**
+   * Back-compat: treat as "whole-package" measurement.
+   */
+  async getPackageSize(packageName: string, workspaceRoot: string): Promise<BundleSizeResult | null> {
+    return this.getBundleSize(
+      {
+        id: `pkg:${packageName}`,
+        displayName: packageName,
+        entryContent: `export * from '${packageName}';`,
+        versionPackageName: packageName,
+      },
+      workspaceRoot
+    );
+  }
+
+  /**
+   * Get cached size synchronously (returns null if not cached)
+   */
+  getCachedBundleSize(id: string, workspaceRoot: string): BundleSizeResult | null {
+    const cacheKey = `${workspaceRoot}:${id}`;
+    const cached = this.cache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < this.cacheDuration) {
+      return cached.data;
+    }
+    return null;
+  }
+
+  /**
+   * Back-compat: cached "whole-package" measurement.
+   */
+  getCachedSize(packageName: string, workspaceRoot: string): BundleSizeResult | null {
+    return this.getCachedBundleSize(`pkg:${packageName}`, workspaceRoot);
+  }
+
+  /**
+   * Whether local bundling is available for the given workspace.
+   */
+  isBundlingAvailable(workspaceRoot: string): boolean {
+    return getEsbuild(workspaceRoot) !== null;
+  }
+
+  /**
+   * Introspection for UI layers to decide what to display without triggering extra work.
+   */
+  getBundleCacheState(id: string, workspaceRoot: string): BundleCacheState {
+    const cacheKey = `${workspaceRoot}:${id}`;
+
+    const cached = this.cache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < this.cacheDuration) {
+      return 'cached';
+    }
+
+    if (this.pendingBuilds.has(cacheKey)) {
+      return 'pending';
+    }
+
+    const failedTime = this.failedPackages.get(cacheKey);
+    if (failedTime && Date.now() - failedTime < this.failedCacheDuration) {
+      return 'failed';
+    }
+
+    if (!this.isBundlingAvailable(workspaceRoot)) {
+      return 'unavailable';
+    }
+
+    return 'missing';
+  }
+
+  private async buildAndMeasure(
+    request: BundleRequest,
+    workspaceRoot: string,
+    cacheKey: string
+  ): Promise<BundleSizeResult | null> {
+    try {
+      // Get package version from node_modules
+      const version =
+        request.versionPackageName ? this.getPackageVersion(request.versionPackageName, workspaceRoot) : null;
+
+      // Build the package with esbuild
+      const result = await this.bundleEntry(request.entryContent, workspaceRoot);
+      if (!result) {
+        this.failedPackages.set(cacheKey, Date.now());
+        return null;
+      }
+
+      const sizeResult: BundleSizeResult = {
+        name: request.displayName,
+        size: result.minified,
+        gzip: result.gzip,
+        version: version ?? 'unknown',
+      };
+
+      // Cache the result
+      this.cache.set(cacheKey, {
+        data: sizeResult,
+        timestamp: Date.now(),
+      });
+
+      return sizeResult;
+    } catch (error) {
+      console.error(`Failed to bundle ${request.displayName}:`, error);
+      this.failedPackages.set(cacheKey, Date.now());
+      return null;
+    }
+  }
+
+  private getPackageVersion(packageName: string, workspaceRoot: string): string | null {
+    try {
+      // Handle scoped packages
+      const packageJsonPath = path.join(
+        workspaceRoot,
+        'node_modules',
+        packageName,
+        'package.json'
+      );
+
+      if (!fs.existsSync(packageJsonPath)) {
+        return null;
+      }
+
+      const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+      return packageJson.version || null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async bundleEntry(entryContent: string, workspaceRoot: string): Promise<{ minified: number; gzip: number } | null> {
+    try {
+      const esbuild = getEsbuild(workspaceRoot);
+      if (!esbuild) {
+        return null;
+      }
+
+      const result = await esbuild.build({
+        stdin: {
+          contents: entryContent,
+          resolveDir: workspaceRoot,
+          loader: 'js',
+        },
+        bundle: true,
+        write: false,
+        minify: true,
+        treeShaking: true,
+        format: 'esm',
+        platform: 'browser',
+        target: 'es2020',
+        // Externalize node built-ins
+        external: [
+          'fs',
+          'path',
+          'os',
+          'crypto',
+          'stream',
+          'util',
+          'events',
+          'buffer',
+          'http',
+          'https',
+          'url',
+          'querystring',
+          'zlib',
+          'net',
+          'tls',
+          'child_process',
+          'cluster',
+          'dgram',
+          'dns',
+          'readline',
+          'repl',
+          'tty',
+          'vm',
+          'assert',
+          'constants',
+          'domain',
+          'punycode',
+          'string_decoder',
+          'timers',
+          'console',
+          'process',
+          'worker_threads',
+          'perf_hooks',
+          'async_hooks',
+          'inspector',
+          'trace_events',
+          'v8',
+        ],
+        logLevel: 'silent',
+        metafile: true,
+      });
+
+      if (!result.outputFiles || result.outputFiles.length === 0) {
+        return null;
+      }
+
+      const output = result.outputFiles[0];
+      const minifiedSize = output.contents.length;
+      const gzippedSize = zlib.gzipSync(output.contents, { level: 3 }).length;
+
+      return {
+        minified: minifiedSize,
+        gzip: gzippedSize,
+      };
+    } catch (error) {
+      // Log but don't throw - some packages may not be bundleable
+      console.debug('Could not bundle entry:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Clear all caches
+   */
+  clearCache(): void {
+    this.cache.clear();
+    this.failedPackages.clear();
+
+    // Allow re-detecting workspace esbuild (e.g. after installing it).
+    workspaceEsbuildCache.clear();
+    globalEsbuildModule = null;
+    triedGlobalEsbuild = false;
+    warnedMissingEsbuild.clear();
+  }
+
+  /**
+   * Format bytes to human readable string
+   */
+  formatSize(bytes: number): string {
+    if (bytes === 0) {
+      return '0B';
+    }
+
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    const value = parseFloat((bytes / Math.pow(k, i)).toFixed(2));
+
+    const formattedValue = value % 1 === 0 ? value.toFixed(0) : value.toString();
+    return `${formattedValue}${sizes[i]}`;
+  }
+}

@@ -2,7 +2,7 @@
   "name": "vscode-bundle-size-plus",
   "displayName": "Bundle Size Plus",
   "description": "Display import/require package size in the editor (supports Vue, Svelte)",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "mipawn",
   "icon": "icon.png",
   "repository": {
@@ -100,7 +100,6 @@
   "dependencies": {
     "@babel/parser": "^7.23.0",
     "@vue/compiler-sfc": "^3.4.0",
-    "axios": "^1.6.0",
     "svelte": "^4.0.0"
   },
   "devDependencies": {
@@ -108,7 +107,6 @@
     "@types/vscode": "^1.80.0",
     "@vscode/vsce": "^2.22.0",
     "esbuild": "^0.19.0",
-    "sharp": "^0.34.5",
     "typescript": "^5.0.0"
   }
 }

@@ -1,12 +1,18 @@
 import * as vscode from 'vscode';
 import { BundleSizeProvider } from './providers/BundleSizeProvider';
 import { InlineDecorationsController } from './providers/InlineDecorationsController';
+import { setOutputChannel, logToOutput } from './utils/logger';
 
 export function activate(context: vscode.ExtensionContext) {
   console.log('Bundle Size Plus extension is now active!');
 
+  const output = vscode.window.createOutputChannel('Bundle Size Plus');
+  setOutputChannel(output);
+  logToOutput('[Bundle Size Plus] Activated');
+  context.subscriptions.push(output);
+
   // Initialize the bundle size provider
-  const bundleSizeProvider = new BundleSizeProvider(context);
+  const bundleSizeProvider = new BundleSizeProvider();
 
   // Inline decorations controller (green, no background)
   const decorationsController = new InlineDecorationsController(bundleSizeProvider);

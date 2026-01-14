@@ -1,175 +1,299 @@
-import * as vscode from 'vscode';
-import axios from 'axios';
+import { LocalBundler, BundleCacheState, BundleRequest } from '../bundler/LocalBundler';
+import type { ImportInfo, ImportKind } from '../parsers/ImportParser';
 
-interface PackageSizeInfo {
+export interface PackageSizeInfo {
   name: string;
   size: number;
   gzip: number;
   version: string;
 }
 
-interface CacheEntry {
-  data: PackageSizeInfo;
-  timestamp: number;
-}
-
 export class BundleSizeProvider {
-  private cache: Map<string, CacheEntry> = new Map();
-  private pendingRequests: Map<string, Promise<PackageSizeInfo | null>> = new Map();
-  private missingCache: Map<string, number> = new Map();
-  private readonly missingCacheDurationMs = 60 * 60 * 1000; // 1 hour
+  private readonly localBundler: LocalBundler;
 
-  constructor(private context: vscode.ExtensionContext) {
-    // Load cache from global state
-    const savedCache = context.globalState.get<Record<string, CacheEntry>>('bundleSizeCache', {});
-    this.cache = new Map(Object.entries(savedCache));
+  constructor() {
+    this.localBundler = new LocalBundler();
   }
 
-  getCachedPackageSize(packageName: string): PackageSizeInfo | null {
-    const cleanName = this.cleanPackageName(packageName);
-    return this.getCachedSize(cleanName);
-  }
-
-  async getPackageSize(packageName: string): Promise<PackageSizeInfo | null> {
-    // Clean package name (remove version specifiers, scopes, etc.)
-    const cleanName = this.cleanPackageName(packageName);
-
-    // Check cache first
-    const cached = this.getCachedSize(cleanName);
-    if (cached) {
-      return cached;
-    }
-
-    // Avoid repeatedly fetching packages that recently failed
-    const lastFailure = this.missingCache.get(cleanName);
-    if (lastFailure && Date.now() - lastFailure < this.missingCacheDurationMs) {
+  getCachedPackageSize(packageName: string, workspaceRoot?: string): PackageSizeInfo | null {
+    if (!workspaceRoot) {
       return null;
     }
 
-    // Check if there's already a pending request for this package
-    const pending = this.pendingRequests.get(cleanName);
-    if (pending) {
-      return pending;
-    }
-
-    // Create new request
-    const request = this.fetchPackageSize(cleanName);
-    this.pendingRequests.set(cleanName, request);
-
-    try {
-      const result = await request;
-      return result;
-    } finally {
-      this.pendingRequests.delete(cleanName);
-    }
-  }
-
-  private getCachedSize(packageName: string): PackageSizeInfo | null {
-    const cached = this.cache.get(packageName);
-    if (!cached) {
+    const request = this.createBundleRequest({
+      packageName,
+      kind: 'export',
+      isExportAll: true,
+    });
+    if (!request) {
       return null;
     }
 
-    const config = vscode.workspace.getConfiguration('bundleSizePlus');
-    const cacheDuration = config.get('cacheDuration', 86400000); // Default: 24 hours
+    return this.localBundler.getCachedBundleSize(request.id, workspaceRoot);
+  }
 
-    const now = Date.now();
-    if (now - cached.timestamp > cacheDuration) {
-      this.cache.delete(packageName);
+  async getPackageSize(packageName: string, workspaceRoot?: string): Promise<PackageSizeInfo | null> {
+    if (!workspaceRoot) {
       return null;
     }
 
-    return cached.data;
-  }
-
-  private async fetchPackageSize(packageName: string): Promise<PackageSizeInfo | null> {
-    try {
-      const url = `https://bundlephobia.com/api/size?package=${encodeURIComponent(packageName)}`;
-      const response = await axios.get(url, {
-        timeout: 10000,
-        headers: {
-          'User-Agent': 'vscode-bundle-size-plus',
-        },
-      });
-
-      const data: PackageSizeInfo = {
-        name: response.data.name || packageName,
-        size: response.data.size || 0,
-        gzip: response.data.gzip || 0,
-        version: response.data.version || 'latest',
-      };
-
-      // Cache the result
-      this.cacheSize(packageName, data);
-
-      return data;
-    } catch (error) {
-      this.missingCache.set(packageName, Date.now());
-      if (axios.isAxiosError(error)) {
-        if (error.response?.status === 404) {
-          console.log(`Package not found: ${packageName}`);
-        } else {
-          console.error(`Error fetching size for ${packageName}:`, error.message);
-        }
-      } else {
-        console.error(`Unexpected error fetching size for ${packageName}:`, error);
-      }
+    const request = this.createBundleRequest({
+      packageName,
+      kind: 'export',
+      isExportAll: true,
+    });
+    if (!request) {
       return null;
     }
+
+    return this.localBundler.getBundleSize(request, workspaceRoot);
   }
 
-  private cacheSize(packageName: string, data: PackageSizeInfo): void {
-    const entry: CacheEntry = {
-      data,
-      timestamp: Date.now(),
+  getCachedImportSize(importInfo: ImportInfo, workspaceRoot?: string): PackageSizeInfo | null {
+    if (!workspaceRoot) {
+      return null;
+    }
+
+    const request = this.createBundleRequest(importInfo);
+    if (!request) {
+      return null;
+    }
+
+    return this.localBundler.getCachedBundleSize(request.id, workspaceRoot);
+  }
+
+  isBundlingAvailable(workspaceRoot?: string): boolean {
+    if (!workspaceRoot) {
+      return false;
+    }
+    return this.localBundler.isBundlingAvailable(workspaceRoot);
+  }
+
+  getImportCacheState(importInfo: ImportInfo, workspaceRoot?: string): BundleCacheState | 'unavailable' {
+    if (!workspaceRoot) {
+      return 'unavailable';
+    }
+
+    const request = this.createBundleRequest(importInfo);
+    if (!request) {
+      return 'unavailable';
+    }
+
+    return this.localBundler.getBundleCacheState(request.id, workspaceRoot);
+  }
+
+  async getImportSize(importInfo: ImportInfo, workspaceRoot?: string): Promise<PackageSizeInfo | null> {
+    if (!workspaceRoot) {
+      return null;
+    }
+
+    const request = this.createBundleRequest(importInfo);
+    if (!request) {
+      return null;
+    }
+
+    return this.localBundler.getBundleSize(request, workspaceRoot);
+  }
+
+  /**
+   * Expose a stable cache id so callers can de-dupe work.
+   */
+  getImportCacheId(importInfo: ImportInfo): string | null {
+    const request = this.createBundleRequest(importInfo);
+    return request?.id ?? null;
+  }
+
+  private createBundleRequest(target: {
+    packageName: string;
+    kind?: ImportKind;
+    namedImports?: string[];
+    hasDefaultImport?: boolean;
+    hasNamespaceImport?: boolean;
+    isSideEffectOnly?: boolean;
+    isExportAll?: boolean;
+    isLocal?: boolean;
+  }): BundleRequest | null {
+    if (target.isLocal) {
+      return null;
+    }
+
+    const moduleSpecifier = this.normalizeModuleSpecifier(target.packageName);
+    if (!moduleSpecifier || moduleSpecifier.startsWith('node:')) {
+      return null;
+    }
+
+    const kind: ImportKind = target.kind ?? 'import';
+    const hasDefaultImport = !!target.hasDefaultImport;
+    const hasNamespaceImport = !!target.hasNamespaceImport;
+    const isExportAll = !!target.isExportAll;
+
+    const namedImports = [...new Set(target.namedImports ?? [])]
+      .filter((name) => name && name !== 'default')
+      .sort();
+
+    const runtimeSpecifierCount =
+      (isExportAll ? 1 : 0) +
+      (hasDefaultImport ? 1 : 0) +
+      (hasNamespaceImport ? 1 : 0) +
+      namedImports.length;
+    const isSideEffectOnly = runtimeSpecifierCount === 0 || !!target.isSideEffectOnly;
+
+    const idParts = [
+      kind,
+      moduleSpecifier,
+      `all:${isExportAll ? 1 : 0}`,
+      `default:${hasDefaultImport ? 1 : 0}`,
+      `ns:${hasNamespaceImport ? 1 : 0}`,
+      `side:${isSideEffectOnly ? 1 : 0}`,
+      `named:${namedImports.join(',')}`,
+    ];
+
+    const entryContent = this.createEntryContent({
+      kind,
+      moduleSpecifier,
+      isExportAll,
+      hasDefaultImport,
+      hasNamespaceImport,
+      isSideEffectOnly,
+      namedImports,
+    });
+
+    const displayName = this.createDisplayName({
+      kind,
+      moduleSpecifier,
+      isExportAll,
+      hasDefaultImport,
+      hasNamespaceImport,
+      isSideEffectOnly,
+      namedImports,
+    });
+
+    return {
+      id: idParts.join('|'),
+      displayName,
+      entryContent,
+      versionPackageName: this.getRootPackageName(moduleSpecifier),
     };
-
-    this.cache.set(packageName, entry);
-
-    // Save to global state (async, no need to await)
-    const cacheObject = Object.fromEntries(this.cache.entries());
-    this.context.globalState.update('bundleSizeCache', cacheObject);
   }
 
-  private cleanPackageName(packageName: string): string {
-    // Remove quotes
-    let cleaned = packageName.replace(/['"]/g, '');
+  private createEntryContent(target: {
+    kind: ImportKind;
+    moduleSpecifier: string;
+    namedImports: string[];
+    hasDefaultImport: boolean;
+    hasNamespaceImport: boolean;
+    isSideEffectOnly: boolean;
+    isExportAll: boolean;
+  }): string {
+    const spec = JSON.stringify(target.moduleSpecifier);
 
-    // Remove relative/absolute path indicators
-    cleaned = cleaned.replace(/^[./~]/, '');
-
-    // For scoped packages (@org/package), keep the scope
-    // For regular packages, just use the package name
-    const parts = cleaned.split('/');
-
-    if (cleaned.startsWith('@') && parts.length >= 2) {
-      // Scoped package: @org/package
-      return `${parts[0]}/${parts[1]}`;
-    } else {
-      // Regular package: just the first part
-      return parts[0];
+    if (target.isExportAll) {
+      return `export * from ${spec};`;
     }
+
+    if (target.isSideEffectOnly) {
+      return `import ${spec};`;
+    }
+
+    const lines: string[] = [];
+
+    if (target.hasNamespaceImport) {
+      lines.push(`import * as __bundleSizePlusNs from ${spec};`);
+      lines.push('export { __bundleSizePlusNs };');
+      return lines.join('\n');
+    }
+
+    if (target.hasDefaultImport) {
+      lines.push(`export { default as __bundleSizePlusDefault } from ${spec};`);
+    }
+
+    if (target.namedImports.length > 0) {
+      lines.push(`export { ${target.namedImports.join(', ')} } from ${spec};`);
+    }
+
+    return lines.join('\n');
+  }
+
+  private createDisplayName(target: {
+    kind: ImportKind;
+    moduleSpecifier: string;
+    namedImports: string[];
+    hasDefaultImport: boolean;
+    hasNamespaceImport: boolean;
+    isSideEffectOnly: boolean;
+    isExportAll: boolean;
+  }): string {
+    const parts: string[] = [target.moduleSpecifier];
+
+    if (target.isExportAll) {
+      parts.push('(export *)');
+      return parts.join(' ');
+    }
+
+    if (target.isSideEffectOnly) {
+      parts.push('(side-effect)');
+      return parts.join(' ');
+    }
+
+    if (target.hasNamespaceImport) {
+      parts.push('(*)');
+    }
+
+    const named = [...target.namedImports];
+    if (target.hasDefaultImport) {
+      parts.push('(default)');
+    }
+    if (named.length > 0) {
+      parts.push(`{ ${named.join(', ')} }`);
+    }
+
+    return parts.join(' ');
+  }
+
+  private normalizeModuleSpecifier(specifier: string): string {
+    // Usually already normalized (AST string), but keep it defensive.
+    let normalized = specifier.replace(/['"]/g, '');
+
+    const queryIndex = normalized.indexOf('?');
+    const hashIndex = normalized.indexOf('#');
+    let end = normalized.length;
+
+    if (queryIndex !== -1) {
+      end = Math.min(end, queryIndex);
+    }
+    if (hashIndex !== -1) {
+      end = Math.min(end, hashIndex);
+    }
+
+    normalized = normalized.slice(0, end);
+    return normalized;
+  }
+
+  private getRootPackageName(moduleSpecifier: string): string | null {
+    if (
+      moduleSpecifier.startsWith('./') ||
+      moduleSpecifier.startsWith('../') ||
+      moduleSpecifier.startsWith('/') ||
+      moduleSpecifier.startsWith('~/') ||
+      moduleSpecifier.startsWith('@/') ||
+      moduleSpecifier.startsWith('#/') ||
+      moduleSpecifier.startsWith('node:')
+    ) {
+      return null;
+    }
+
+    const parts = moduleSpecifier.split('/');
+    if (moduleSpecifier.startsWith('@')) {
+      return parts.length >= 2 ? `${parts[0]}/${parts[1]}` : null;
+    }
+    return parts[0] ?? null;
   }
 
   clearCache(): void {
-    this.cache.clear();
-    this.missingCache.clear();
-    this.context.globalState.update('bundleSizeCache', {});
+    this.localBundler.clearCache();
   }
 
   formatSize(bytes: number): string {
-    if (bytes === 0) {
-      return '0B';
-    }
-
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    const value = parseFloat((bytes / Math.pow(k, i)).toFixed(2));
-
-    // Remove unnecessary decimal points (2.00 -> 2, 2.10 -> 2.1)
-    const formattedValue = value % 1 === 0 ? value.toFixed(0) : value.toString();
-
-    return `${formattedValue}${sizes[i]}`;
+    return this.localBundler.formatSize(bytes);
   }
 }
