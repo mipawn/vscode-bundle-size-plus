@@ -1,5 +1,6 @@
 export type OutputChannelLike = {
   appendLine(value: string): void;
+  show?(preserveFocus?: boolean): void;
 };
 
 let outputChannel: OutputChannelLike | null = null;
@@ -32,5 +33,6 @@ export function logToOutput(message: string): void {
 export function logWarnToOutput(message: string, error?: unknown): void {
   const line = error ? `${message}\n${formatError(error)}` : message;
   outputChannel?.appendLine(line);
+  // Make warnings discoverable: reveal the output channel without stealing focus.
+  outputChannel?.show?.(true);
 }
-

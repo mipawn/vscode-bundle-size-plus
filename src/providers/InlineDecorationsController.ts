@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { BundleSizeProvider } from './BundleSizeProvider';
 import { parseImports, ImportInfo } from '../parsers/ImportParser';
-import { debounce, resolveImportPath, getLocalFileSize, getGzipSize } from '../utils/helpers';
+import { debounce, resolveImportPath, getLocalFileSize, getGzipSize, getProjectRootForFile } from '../utils/helpers';
 
 const SUPPORTED_LANGUAGES = new Set([
   'javascript',
@@ -116,7 +116,8 @@ export class InlineDecorationsController implements vscode.Disposable {
 
     const imports = await this.getCachedImports(document, key);
     const visibleImports = this.filterVisibleImports(imports, editor);
-    const workspaceRoot = vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath;
+    const workspaceFolderRoot = vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath;
+    const workspaceRoot = getProjectRootForFile(document.uri.fsPath, workspaceFolderRoot);
     const bundlingAvailable = this.bundleSizeProvider.isBundlingAvailable(workspaceRoot);
 
     const decorations: vscode.DecorationOptions[] = [];
@@ -201,7 +202,7 @@ export class InlineDecorationsController implements vscode.Disposable {
 
             decorations.push({
               range,
-              renderOptions: { after: { contentText: ` ${sizeLabel} (${gzipLabel} zipped)` } },
+              renderOptions: { after: { contentText: ` ${sizeLabel} (${gzipLabel} zipped) (resolved)` } },
               hoverMessage: new vscode.MarkdownString(
                 `### Resolved Module\n\n` +
                   `**Import:** \`${imp.packageName}\`\n\n` +

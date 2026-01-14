@@ -29,6 +29,10 @@ export function activate(context: vscode.ExtensionContext) {
     }
   );
 
+  const showOutputCommand = vscode.commands.registerCommand('bundleSizePlus.showOutput', () => {
+    output.show(true);
+  });
+
   const toggleInlayHintsCommand = vscode.commands.registerCommand(
     'bundleSizePlus.toggleInlayHints',
     async () => {
@@ -41,7 +45,7 @@ export function activate(context: vscode.ExtensionContext) {
     }
   );
 
-  context.subscriptions.push(clearCacheCommand, toggleInlayHintsCommand);
+  context.subscriptions.push(clearCacheCommand, showOutputCommand, toggleInlayHintsCommand);
 
   console.log('Bundle Size Plus: All providers registered');
 }

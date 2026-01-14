@@ -2,7 +2,7 @@
   "name": "vscode-bundle-size-plus",
   "displayName": "Bundle Size Plus",
   "description": "Display import/require package size in the editor (supports Vue, Svelte)",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "publisher": "mipawn",
   "icon": "icon.png",
   "repository": {
@@ -27,6 +27,9 @@
     "typescript"
   ],
   "activationEvents": [
+    "onCommand:bundleSizePlus.clearCache",
+    "onCommand:bundleSizePlus.showOutput",
+    "onCommand:bundleSizePlus.toggleInlayHints",
     "onLanguage:javascript",
     "onLanguage:javascriptreact",
     "onLanguage:typescript",
@@ -36,6 +39,23 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "commands": [
+      {
+        "command": "bundleSizePlus.clearCache",
+        "title": "Clear Cache",
+        "category": "Bundle Size Plus"
+      },
+      {
+        "command": "bundleSizePlus.showOutput",
+        "title": "Show Output",
+        "category": "Bundle Size Plus"
+      },
+      {
+        "command": "bundleSizePlus.toggleInlayHints",
+        "title": "Toggle Inlay Hints",
+        "category": "Bundle Size Plus"
+      }
+    ],
     "colors": [
       {
         "id": "bundleSizePlus.inlayHint",

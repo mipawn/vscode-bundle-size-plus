@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { BundleSizeProvider } from './BundleSizeProvider';
 import { parseImports } from '../parsers/ImportParser';
-import { resolveImportPath, getLocalFileSize, getGzipSize } from '../utils/helpers';
+import { resolveImportPath, getLocalFileSize, getGzipSize, getProjectRootForFile } from '../utils/helpers';
 
 export class InlayHintsProvider implements vscode.InlayHintsProvider {
   constructor(private bundleSizeProvider: BundleSizeProvider) {}
@@ -20,7 +20,8 @@ export class InlayHintsProvider implements vscode.InlayHintsProvider {
 
     const hints: vscode.InlayHint[] = [];
 
-    const workspaceRoot = vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath;
+    const workspaceFolderRoot = vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath;
+    const workspaceRoot = getProjectRootForFile(document.uri.fsPath, workspaceFolderRoot);
 
     try {
       // Parse imports from the document

@@ -5,6 +5,34 @@ import { createRequire } from 'module';
 import { logWarnToOutput } from '../utils/logger';
 type EsbuildModule = typeof import('esbuild');
 
+const ASSET_LOADERS: Record<string, 'file'> = {
+  // Styles (preprocessors): we can't compile these without plugins, so treat as assets.
+  '.less': 'file',
+  '.sass': 'file',
+  '.scss': 'file',
+  '.styl': 'file',
+  '.stylus': 'file',
+  // Images
+  '.svg': 'file',
+  '.png': 'file',
+  '.jpg': 'file',
+  '.jpeg': 'file',
+  '.gif': 'file',
+  '.webp': 'file',
+  '.avif': 'file',
+  '.ico': 'file',
+  '.bmp': 'file',
+  '.tiff': 'file',
+  // Fonts
+  '.woff': 'file',
+  '.woff2': 'file',
+  '.ttf': 'file',
+  '.otf': 'file',
+  '.eot': 'file',
+  // Other common binaries
+  '.wasm': 'file',
+};
+
 const workspaceEsbuildCache = new Map<string, EsbuildModule | null>();
 let globalEsbuildModule: EsbuildModule | null = null;
 let triedGlobalEsbuild = false;
@@ -171,6 +199,11 @@ interface CacheEntry {
   timestamp: number;
 }
 
+type PendingBuild = {
+  generation: number;
+  promise: Promise<BundleSizeResult | null>;
+};
+
 /**
  * LocalBundler uses esbuild to bundle packages locally and calculate their sizes.
  * This provides more accurate results than online APIs as it uses the actual
@@ -178,16 +211,18 @@ interface CacheEntry {
  */
 export class LocalBundler {
   private cache = new Map<string, CacheEntry>();
-  private pendingBuilds = new Map<string, Promise<BundleSizeResult | null>>();
+  private pendingBuilds = new Map<string, PendingBuild>();
   private failedPackages = new Map<string, number>();
   private readonly failedCacheDuration = 5 * 60 * 1000; // 5 minutes
   private readonly cacheDuration = 60 * 60 * 1000; // 1 hour
+  private cacheGeneration = 0;
 
   /**
    * Get the bundle size for an import signature using local esbuild bundling.
    */
   async getBundleSize(request: BundleRequest, workspaceRoot: string): Promise<BundleSizeResult | null> {
     const cacheKey = `${workspaceRoot}:${request.id}`;
+    const generation = this.cacheGeneration;
 
     // Check cache first
     const cached = this.cache.get(cacheKey);
@@ -203,18 +238,21 @@ export class LocalBundler {
 
     // Check for pending build
     const pending = this.pendingBuilds.get(cacheKey);
-    if (pending) {
-      return pending;
+    if (pending && pending.generation === generation) {
+      return pending.promise;
     }
 
     // Start new build
-    const buildPromise = this.buildAndMeasure(request, workspaceRoot, cacheKey);
-    this.pendingBuilds.set(cacheKey, buildPromise);
+    const buildPromise = this.buildAndMeasure(request, workspaceRoot, cacheKey, generation);
+    this.pendingBuilds.set(cacheKey, { generation, promise: buildPromise });
 
     try {
       return await buildPromise;
     } finally {
-      this.pendingBuilds.delete(cacheKey);
+      const current = this.pendingBuilds.get(cacheKey);
+      if (current?.promise === buildPromise) {
+        this.pendingBuilds.delete(cacheKey);
+      }
     }
   }
 
@@ -270,7 +308,9 @@ export class LocalBundler {
       return 'cached';
     }
 
-    if (this.pendingBuilds.has(cacheKey)) {
+    const generation = this.cacheGeneration;
+    const pending = this.pendingBuilds.get(cacheKey);
+    if (pending && pending.generation === generation) {
       return 'pending';
     }
 
@@ -289,7 +329,8 @@ export class LocalBundler {
   private async buildAndMeasure(
     request: BundleRequest,
     workspaceRoot: string,
-    cacheKey: string
+    cacheKey: string,
+    generation: number
   ): Promise<BundleSizeResult | null> {
     try {
       // Get package version from node_modules
@@ -299,7 +340,9 @@ export class LocalBundler {
       // Build the package with esbuild
       const result = await this.bundleEntry(request.entryContent, workspaceRoot);
       if (!result) {
-        this.failedPackages.set(cacheKey, Date.now());
+        if (generation === this.cacheGeneration) {
+          this.failedPackages.set(cacheKey, Date.now());
+        }
         return null;
       }
 
@@ -311,15 +354,19 @@ export class LocalBundler {
       };
 
       // Cache the result
-      this.cache.set(cacheKey, {
-        data: sizeResult,
-        timestamp: Date.now(),
-      });
+      if (generation === this.cacheGeneration) {
+        this.cache.set(cacheKey, {
+          data: sizeResult,
+          timestamp: Date.now(),
+        });
+      }
 
       return sizeResult;
     } catch (error) {
       console.error(`Failed to bundle ${request.displayName}:`, error);
-      this.failedPackages.set(cacheKey, Date.now());
+      if (generation === this.cacheGeneration) {
+        this.failedPackages.set(cacheKey, Date.now());
+      }
       return null;
     }
   }
@@ -360,11 +407,16 @@ export class LocalBundler {
         },
         bundle: true,
         write: false,
+        // Required when CSS (and other emitted assets) are part of the bundle graph.
+        // We don't write to disk (`write:false`), but esbuild still needs a path
+        // to derive output filenames.
+        outfile: path.join(workspaceRoot, '__bundle_size_plus_entry__.js'),
         minify: true,
         treeShaking: true,
         format: 'esm',
         platform: 'browser',
         target: 'es2020',
+        loader: ASSET_LOADERS,
         // Externalize node built-ins
         external: [
           'fs',
@@ -413,9 +465,11 @@ export class LocalBundler {
         return null;
       }
 
-      const output = result.outputFiles[0];
-      const minifiedSize = output.contents.length;
-      const gzippedSize = zlib.gzipSync(output.contents, { level: 3 }).length;
+      const minifiedSize = result.outputFiles.reduce((sum, file) => sum + file.contents.length, 0);
+      const gzippedSize = result.outputFiles.reduce(
+        (sum, file) => sum + zlib.gzipSync(file.contents, { level: 3 }).length,
+        0
+      );
 
       return {
         minified: minifiedSize,
@@ -432,7 +486,9 @@ export class LocalBundler {
    * Clear all caches
    */
   clearCache(): void {
+    this.cacheGeneration += 1;
     this.cache.clear();
+    this.pendingBuilds.clear();
     this.failedPackages.clear();
 
     // Allow re-detecting workspace esbuild (e.g. after installing it).

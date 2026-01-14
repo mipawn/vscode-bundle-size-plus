@@ -20,16 +20,7 @@ build.js
 analyze-build.js
 
 # Documentation files (keep only essential ones in package)
-DEVELOPMENT.md
-PROJECT_OVERVIEW.md
-QUICK_REFERENCE.md
-QUICK_START.md
-GIT_COMMIT_GUIDE.md
-setup.sh
-使用说明.md
-项目完成报告.md
 本地测试指南.md
-颜色配置说明.md
 .claude/**
 
 # Git files

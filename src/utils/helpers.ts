@@ -238,6 +238,19 @@ function findNearestPackageRoot(currentDir: string, workspaceRoot: string): stri
   return null;
 }
 
+/**
+ * Prefer resolving tooling (esbuild) and dependencies relative to the nearest
+ * package root for the current file (monorepo-friendly).
+ */
+export function getProjectRootForFile(currentFilePath: string, workspaceRoot?: string): string | undefined {
+  if (!workspaceRoot) {
+    return workspaceRoot;
+  }
+
+  const currentDir = path.dirname(currentFilePath);
+  return findNearestPackageRoot(currentDir, workspaceRoot) ?? workspaceRoot;
+}
+
 function resolveWithTsconfigPaths(
   importPath: string,
   currentDir: string,
