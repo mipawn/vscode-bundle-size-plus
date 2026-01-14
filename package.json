@@ -94,8 +94,8 @@
     "watch": "node build.js --watch",
     "compile": "tsc -p ./",
     "lint": "eslint src --ext ts",
-    "package": "vsce package",
-    "publish": "vsce publish"
+    "package": "vsce package --no-dependencies",
+    "publish": "vsce publish --no-dependencies"
   },
   "dependencies": {
     "@babel/parser": "^7.23.0",
