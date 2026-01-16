@@ -112,12 +112,18 @@ export class BundleSizeProvider {
     isSideEffectOnly?: boolean;
     isExportAll?: boolean;
     isLocal?: boolean;
+    resolvedPath?: string;
   }): BundleRequest | null {
-    if (target.isLocal) {
+    if (target.isLocal && !target.resolvedPath) {
+      // Relative/aliased workspace imports need a concrete resolved path for stdin bundling.
       return null;
     }
 
-    const moduleSpecifier = this.normalizeModuleSpecifier(target.packageName);
+    const displayModuleSpecifier = this.normalizeModuleSpecifier(target.packageName);
+    const moduleSpecifier = target.resolvedPath
+      ? this.normalizeModuleSpecifier(target.resolvedPath).replace(/\\/g, '/')
+      : displayModuleSpecifier;
+
     if (!moduleSpecifier || moduleSpecifier.startsWith('node:')) {
       return null;
     }
@@ -160,7 +166,7 @@ export class BundleSizeProvider {
 
     const displayName = this.createDisplayName({
       kind,
-      moduleSpecifier,
+      moduleSpecifier: displayModuleSpecifier,
       isExportAll,
       hasDefaultImport,
       hasNamespaceImport,
@@ -172,7 +178,7 @@ export class BundleSizeProvider {
       id: idParts.join('|'),
       displayName,
       entryContent,
-      versionPackageName: this.getRootPackageName(moduleSpecifier),
+      versionPackageName: this.getRootPackageName(displayModuleSpecifier),
     };
   }
 

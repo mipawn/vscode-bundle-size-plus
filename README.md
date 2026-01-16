@@ -10,7 +10,7 @@ A VSCode extension that displays the bundle size of imported packages directly i
 - **Inline Decorations + Hover**: Shows sizes right next to `import`/`export`/`require()` lines, with hover details (resolved path / version / sizes)
 - **Import-Signature Aware**: Measures what you import (default/named/namespace/side-effect) so tree-shaking can reflect smaller imports
 - **Vue & Svelte Support**: Parses `<script>` / `<script setup>` blocks (including `lang="ts"`, `lang="tsx"`, `lang="jsx"`)
-- **Local/Workspace Imports**: For resolved files, shows raw file size + gzipped size (supports common aliases and `tsconfig.json` paths)
+- **Local/Workspace Imports**: For resolved workspace files, measures bundled size when possible and falls back to raw file size + gzipped size (supports common aliases and `tsconfig.json` paths)
 - **Offline by Design**: No external API calls; results are cached and computed lazily for visible imports
 
 ## Supported File Types
@@ -75,12 +75,17 @@ You can customize the extension behavior through VSCode settings:
 
 ## Theme / Color
 
-The hint color can be customized via the theme token `bundleSizePlus.inlayHint`:
+Hints are color-coded by size (≥100KB warning, ≥500KB heavy). Customize via these theme tokens:
+- `bundleSizePlus.inlayHint`
+- `bundleSizePlus.inlayHintWarning`
+- `bundleSizePlus.inlayHintHeavy`
 
 ```json
 {
   "workbench.colorCustomizations": {
-    "bundleSizePlus.inlayHint": "#00C853"
+    "bundleSizePlus.inlayHint": "#00C853",
+    "bundleSizePlus.inlayHintWarning": "#FFB300",
+    "bundleSizePlus.inlayHintHeavy": "#FF5252"
   }
 }
 ```

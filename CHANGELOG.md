@@ -2,6 +2,21 @@
 
 All notable changes to the "Bundle Size Plus" extension will be documented in this file.
 
+## [0.5.0] - 2026-01-16
+
+### Added
+
+- Color-coded size hints (≥100KB warning, ≥500KB heavy)
+- Theme tokens: `bundleSizePlus.inlayHintWarning` and `bundleSizePlus.inlayHintHeavy`
+- Workspace imports now show bundled sizes instead of raw file sizes
+- Auto-detect `tsconfig.json`/`jsconfig.json` for path resolution
+
+### Fixed
+
+- Gracefully handle missing/optional dependencies during bundling
+- Externalize `.node` and `node:*` imports to prevent build failures
+- Better loading states: `(bundling...)`, `(bundle failed)`, `(resolved)`
+
 ## [0.4.0] - 2026-01-14
 
 ### Added

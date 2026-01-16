@@ -10,7 +10,7 @@
 - **行内装饰 + 悬停提示**：在 `import`/`export`/`require()` 行旁边直接显示体积，悬停可查看详细信息（解析路径/版本/体积）
 - **导入签名感知**：测量你实际导入的内容（默认导出/命名导出/命名空间导入/副作用导入），tree-shaking 可以反映更小的导入体积
 - **Vue & Svelte 支持**：解析 `<script>` / `<script setup>` 代码块（包括 `lang="ts"`、`lang="tsx"`、`lang="jsx"`）
-- **本地/工作区导入**：对于解析的本地文件，显示原始文件大小和 gzip 后的大小（支持常见别名和 `tsconfig.json` 路径）
+- **本地/工作区导入**：对于解析的本地文件，能打包时显示打包体积，无法打包/等待时回退显示原始文件大小和 gzip 后的大小（支持常见别名和 `tsconfig.json` 路径）
 - **离线优先设计**：无需外部 API 调用；结果被缓存并按需计算可见的导入
 
 ## 支持的文件类型
@@ -75,12 +75,17 @@ import lodash from 'lodash'; // 72.5KB (24.3KB zipped)
 
 ## 主题/颜色
 
-可以通过主题标记 `bundleSizePlus.inlayHint` 自定义提示颜色：
+提示会按体积着色（≥100KB 黄色，≥500KB 红色）。可以通过主题标记自定义：
+- `bundleSizePlus.inlayHint`
+- `bundleSizePlus.inlayHintWarning`
+- `bundleSizePlus.inlayHintHeavy`
 
 ```json
 {
   "workbench.colorCustomizations": {
-    "bundleSizePlus.inlayHint": "#00C853"
+    "bundleSizePlus.inlayHint": "#00C853",
+    "bundleSizePlus.inlayHintWarning": "#FFB300",
+    "bundleSizePlus.inlayHintHeavy": "#FF5252"
   }
 }
 ```

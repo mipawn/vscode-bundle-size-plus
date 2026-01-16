@@ -33,6 +33,24 @@ const ASSET_LOADERS: Record<string, 'file'> = {
   '.wasm': 'file',
 };
 
+function findWorkspaceTsconfig(workspaceRoot: string): string | undefined {
+  const tsconfigPath = path.join(workspaceRoot, 'tsconfig.json');
+  if (fs.existsSync(tsconfigPath) && fs.statSync(tsconfigPath).isFile()) {
+    return tsconfigPath;
+  }
+
+  const jsconfigPath = path.join(workspaceRoot, 'jsconfig.json');
+  if (fs.existsSync(jsconfigPath) && fs.statSync(jsconfigPath).isFile()) {
+    return jsconfigPath;
+  }
+
+  return undefined;
+}
+
+function isInNodeModules(filePath: string): boolean {
+  return filePath.includes(`${path.sep}node_modules${path.sep}`);
+}
+
 const workspaceEsbuildCache = new Map<string, EsbuildModule | null>();
 let globalEsbuildModule: EsbuildModule | null = null;
 let triedGlobalEsbuild = false;
@@ -336,6 +354,7 @@ export class LocalBundler {
       // Get package version from node_modules
       const version =
         request.versionPackageName ? this.getPackageVersion(request.versionPackageName, workspaceRoot) : null;
+      const versionLabel = request.versionPackageName ? (version ?? 'unknown') : 'local';
 
       // Build the package with esbuild
       const result = await this.bundleEntry(request.entryContent, workspaceRoot);
@@ -350,7 +369,7 @@ export class LocalBundler {
         name: request.displayName,
         size: result.minified,
         gzip: result.gzip,
-        version: version ?? 'unknown',
+        version: versionLabel,
       };
 
       // Cache the result
@@ -399,6 +418,62 @@ export class LocalBundler {
         return null;
       }
 
+      const tsconfig = findWorkspaceTsconfig(workspaceRoot);
+
+      const gracefulExternalizePlugin: import('esbuild').Plugin = {
+        name: 'bundle-size-plus-graceful-externalize',
+        setup(build) {
+          const resolveCache = new Map<string, import('esbuild').OnResolveResult>();
+          const skipResolveKey = '__bundleSizePlusSkipResolve';
+
+          build.onResolve({ filter: /\.node$/ }, (args) => {
+            return { path: args.path, external: true };
+          });
+
+          build.onResolve({ filter: /^[^./][^:]*$/ }, async (args) => {
+            if ((args.pluginData as any)?.[skipResolveKey]) {
+              return;
+            }
+
+            // Only treat unresolved imports from within node_modules as optional/missing.
+            // Workspace code should still surface real resolution errors.
+            if (!args.importer || !isInNodeModules(args.importer)) {
+              return;
+            }
+
+            const cacheKey = `${args.importer}\0${args.path}`;
+            const cached = resolveCache.get(cacheKey);
+            if (cached) {
+              return cached;
+            }
+
+            const resolved = await build.resolve(args.path, {
+              importer: args.importer,
+              resolveDir: args.resolveDir,
+              kind: args.kind,
+              pluginData: { [skipResolveKey]: true },
+            });
+
+            if (resolved.errors.length > 0) {
+              const externalized: import('esbuild').OnResolveResult = { path: args.path, external: true };
+              resolveCache.set(cacheKey, externalized);
+              return externalized;
+            }
+
+            const result: import('esbuild').OnResolveResult = {
+              path: resolved.path,
+              namespace: resolved.namespace,
+              external: resolved.external,
+              sideEffects: resolved.sideEffects,
+              pluginData: resolved.pluginData,
+            };
+
+            resolveCache.set(cacheKey, result);
+            return result;
+          });
+        },
+      };
+
       const result = await esbuild.build({
         stdin: {
           contents: entryContent,
@@ -416,9 +491,12 @@ export class LocalBundler {
         format: 'esm',
         platform: 'browser',
         target: 'es2020',
+        tsconfig,
         loader: ASSET_LOADERS,
+        plugins: [gracefulExternalizePlugin],
         // Externalize node built-ins
         external: [
+          'node:*',
           'fs',
           'path',
           'os',

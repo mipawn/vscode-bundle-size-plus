@@ -2,7 +2,7 @@
   "name": "vscode-bundle-size-plus",
   "displayName": "Bundle Size Plus",
   "description": "Display import/require package size in the editor (supports Vue, Svelte)",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "publisher": "mipawn",
   "icon": "icon.png",
   "repository": {
@@ -66,6 +66,26 @@
           "highContrast": "#00C853",
           "highContrastLight": "#008A00"
         }
+      },
+      {
+        "id": "bundleSizePlus.inlayHintWarning",
+        "description": "Warning color for large bundle sizes",
+        "defaults": {
+          "dark": "#FFB300",
+          "light": "#C88700",
+          "highContrast": "#FFB300",
+          "highContrastLight": "#C88700"
+        }
+      },
+      {
+        "id": "bundleSizePlus.inlayHintHeavy",
+        "description": "Heavy color for very large bundle sizes",
+        "defaults": {
+          "dark": "#FF5252",
+          "light": "#D32F2F",
+          "highContrast": "#FF5252",
+          "highContrastLight": "#D32F2F"
+        }
       }
     ],
     "configuration": {
@@ -113,6 +133,7 @@
     "build": "node build.js",
     "watch": "node build.js --watch",
     "compile": "tsc -p ./",
+    "test": "npm run compile && node test/regression.js",
     "lint": "eslint src --ext ts",
     "package": "vsce package --no-dependencies",
     "publish": "vsce publish --no-dependencies"

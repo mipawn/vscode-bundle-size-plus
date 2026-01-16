@@ -13,6 +13,9 @@ const SUPPORTED_LANGUAGES = new Set([
   'svelte',
 ]);
 
+const WARNING_SIZE_BYTES = 100 * 1024;
+const ERROR_SIZE_BYTES = 500 * 1024;
+
 export class InlineDecorationsController implements vscode.Disposable {
   private readonly decorationType: vscode.TextEditorDecorationType;
   private readonly disposables: vscode.Disposable[] = [];
@@ -84,6 +87,16 @@ export class InlineDecorationsController implements vscode.Disposable {
     this.decorationType.dispose();
   }
 
+  private getHintColor(bytes: number): vscode.ThemeColor {
+    if (bytes >= ERROR_SIZE_BYTES) {
+      return new vscode.ThemeColor('bundleSizePlus.inlayHintHeavy');
+    }
+    if (bytes >= WARNING_SIZE_BYTES) {
+      return new vscode.ThemeColor('bundleSizePlus.inlayHintWarning');
+    }
+    return new vscode.ThemeColor('bundleSizePlus.inlayHint');
+  }
+
   private async updateVisibleEditors(): Promise<void> {
     const runId = ++this.updateRunId;
     const editors = vscode.window.visibleTextEditors;
@@ -133,41 +146,24 @@ export class InlineDecorationsController implements vscode.Disposable {
         resolvedPath.startsWith(workspaceRoot) &&
         !resolvedPath.includes(`${path.sep}node_modules${path.sep}`);
 
-      // Local or workspace-resolved import: show file size directly
-      if (resolvedPath && (imp.isLocal || isWorkspaceFile)) {
-        const size = getLocalFileSize(resolvedPath);
-        const gzip = getGzipSize(resolvedPath);
+      const shouldBundleResolvedPath = !!resolvedPath && (imp.isLocal || isWorkspaceFile);
+      const bundleTarget: ImportInfo = shouldBundleResolvedPath ? { ...imp, resolvedPath } : imp;
 
-        if (size !== null && gzip !== null) {
-          const sizeLabel = this.bundleSizeProvider.formatSize(size);
-          const gzipLabel = this.bundleSizeProvider.formatSize(gzip);
-
-          decorations.push({
-            range,
-            renderOptions: { after: { contentText: ` ${sizeLabel} (${gzipLabel} zipped)` } },
-            hoverMessage: new vscode.MarkdownString(
-              `### Local Import\n\n` +
-                `**Path:** \`${imp.packageName}\`\n\n` +
-                `**Resolved:** \`${resolvedPath}\`\n\n` +
-                `**File Size:** ${sizeLabel}\n` +
-                `**Gzipped:** ${gzipLabel}`
-            ),
-          });
-        }
-        continue;
-      }
-
-      // Non-local: use local bundler to calculate size
-      const cached = this.bundleSizeProvider.getCachedImportSize(imp, workspaceRoot);
+      // Use local bundler to calculate size when possible (including workspace files when resolved)
+      const cached = this.bundleSizeProvider.getCachedImportSize(bundleTarget, workspaceRoot);
       if (cached) {
         const minifiedSize = this.bundleSizeProvider.formatSize(cached.size);
         const gzippedSize = this.bundleSizeProvider.formatSize(cached.gzip);
+        const resolvedLine = resolvedPath ? `**Resolved:** \`${resolvedPath}\`\n\n` : '';
+        const hintColor = this.getHintColor(cached.size);
 
         decorations.push({
           range,
-          renderOptions: { after: { contentText: ` ${minifiedSize} (${gzippedSize} zipped)` } },
+          renderOptions: { after: { contentText: ` ${minifiedSize} (${gzippedSize} zipped)`, color: hintColor } },
           hoverMessage: new vscode.MarkdownString(
             `### ${cached.name}\n\n` +
+              `**Import:** \`${imp.packageName}\`\n\n` +
+              resolvedLine +
               `**Version:** ${cached.version}\n\n` +
               `**Sizes (bundled with esbuild):**\n` +
               `- Minified: ${minifiedSize}\n` +
@@ -176,9 +172,9 @@ export class InlineDecorationsController implements vscode.Disposable {
           ),
         });
       } else {
-        const cacheState = this.bundleSizeProvider.getImportCacheState(imp, workspaceRoot);
+        const cacheState = this.bundleSizeProvider.getImportCacheState(bundleTarget, workspaceRoot);
 
-        // If we can resolve to a concrete file (e.g. node_modules subpath), show file size as a fast fallback.
+        // If we can resolve to a concrete file, show file size as a fast fallback.
         if (resolvedPath) {
           const size = getLocalFileSize(resolvedPath);
           const gzip = getGzipSize(resolvedPath);
@@ -186,6 +182,7 @@ export class InlineDecorationsController implements vscode.Disposable {
           if (size !== null && gzip !== null) {
             const sizeLabel = this.bundleSizeProvider.formatSize(size);
             const gzipLabel = this.bundleSizeProvider.formatSize(gzip);
+            const hintColor = this.getHintColor(size);
 
             let bundleNote = '_(Bundle size being calculated...)_';
             if (!workspaceRoot) {
@@ -200,11 +197,14 @@ export class InlineDecorationsController implements vscode.Disposable {
               bundleNote = '_(Bundle size being calculated...)_';
             }
 
+            const resolvedHeader = imp.isLocal || isWorkspaceFile ? 'Workspace Module' : 'Resolved Module';
             decorations.push({
               range,
-              renderOptions: { after: { contentText: ` ${sizeLabel} (${gzipLabel} zipped) (resolved)` } },
+              renderOptions: {
+                after: { contentText: ` ${sizeLabel} (${gzipLabel} zipped) (resolved)`, color: hintColor },
+              },
               hoverMessage: new vscode.MarkdownString(
-                `### Resolved Module\n\n` +
+                `### ${resolvedHeader}\n\n` +
                   `**Import:** \`${imp.packageName}\`\n\n` +
                   `**Resolved:** \`${resolvedPath}\`\n\n` +
                   `**File Size:** ${sizeLabel}\n` +
@@ -213,12 +213,33 @@ export class InlineDecorationsController implements vscode.Disposable {
               ),
             });
           }
+        } else if (workspaceRoot && bundlingAvailable) {
+          // We can't resolve a concrete file path (e.g. ESM-only exports), but still show that we're working.
+          const pendingNote =
+            cacheState === 'failed'
+              ? ' (bundle failed)'
+              : cacheState === 'pending'
+                ? ' (bundling...)'
+                : cacheState === 'missing'
+                  ? ' (bundling...)'
+                  : '';
+          if (pendingNote) {
+            decorations.push({
+              range,
+              renderOptions: { after: { contentText: pendingNote } },
+              hoverMessage: new vscode.MarkdownString(
+                `### Bundle Size\n\n` +
+                  `**Import:** \`${imp.packageName}\`\n\n` +
+                  `_(Bundling with esbuild)_`
+              ),
+            });
+          }
         }
 
         // Trigger background build (deduped by LocalBundler)
-        const cacheId = this.bundleSizeProvider.getImportCacheId(imp);
+        const cacheId = this.bundleSizeProvider.getImportCacheId(bundleTarget);
         if (cacheId && workspaceRoot && bundlingAvailable && cacheState === 'missing') {
-          missingImports.set(cacheId, imp);
+          missingImports.set(cacheId, bundleTarget);
         }
       }
     }

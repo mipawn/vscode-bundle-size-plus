@@ -10,6 +10,11 @@ export interface ImportInfo {
   position: vscode.Position;
   line: number;
   isLocal?: boolean; // Flag to indicate if this is a local import
+  /**
+   * Absolute path for workspace/local imports when the UI layer resolves them.
+   * Used to enable accurate bundling of local modules via esbuild.
+   */
+  resolvedPath?: string;
 
   /**
    * What kind of statement produced this import.
